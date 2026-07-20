@@ -1,4 +1,14 @@
+
+
 Flask==3.0.3
-PyPDF2==3.0.1
-python-docx==1.1.2
+requests==2.32.3
 beautifulsoup4==4.12.3
+python-docx==1.1.2
+PyPDF2==3.0.1
+Werkzeug==3.0.3
+
+# Opsional, untuk reminder WA otomatis jalan sendiri tanpa cron eksternal:
+APScheduler==3.10.4
+
+# Opsional, supaya konfigurasi (API key dll) bisa ditaruh di file .env:
+python-dotenv==1.0.1
