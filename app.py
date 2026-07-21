@@ -1477,7 +1477,6 @@ BASE_TEMPLATE = """
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('index') }}"><i class="bi bi-house me-1"></i>Home</a></li>
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('documents') }}"><i class="bi bi-file-earmark me-1"></i>Dokumen</a></li>
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('comparisons') }}"><i class="bi bi-bar-chart me-1"></i>Progress</a></li>
-        <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('testing_panel') }}"><i class="bi bi-flask me-1"></i>Testing</a></li>
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('settings') }}"><i class="bi bi-gear me-1"></i>Settings</a></li>
         <li class="nav-item"><a class="nav-link text-danger" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right me-1"></i>Logout</a></li>
         {% else %}
