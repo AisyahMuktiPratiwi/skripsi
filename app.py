@@ -17,15 +17,23 @@ from PyPDF2 import PdfReader
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
+# ==================== KONFIGURASI ====================
+BASE_DIR = Path(__file__).resolve().parent
+
 # Muat variabel dari file .env (kalau ada) supaya tidak perlu set env var manual tiap buka terminal.
+# PENTING: load_dotenv() TANPA path mencari .env berdasarkan current working directory proses
+# yang menjalankan app ini — bukan lokasi file app.py. Di local biasanya cwd = folder project
+# (karena dijalankan lewat `python app.py` dari situ), jadi ketemu. Tapi di PythonAnywhere,
+# proses WSGI yang menjalankan app cwd-nya BEDA (bukan folder project), jadi .env gak pernah
+# kebaca -> semua os.environ.get(...) balik ke default kosong (makanya FONNTE_API_KEY kosong
+# hanya di PythonAnywhere, padahal di local jalan normal). Kasih path eksplisit ke BASE_DIR/.env
+# supaya selalu ketemu, gak peduli proses ini dijalankan dari direktori mana pun.
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(BASE_DIR / ".env")
 except ImportError:
     pass
 
-# ==================== KONFIGURASI ====================
-BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_FOLDER = BASE_DIR / "uploads"
 DB_PATH = BASE_DIR / "similarity.db"
 UPLOAD_FOLDER.mkdir(exist_ok=True)
@@ -1469,7 +1477,7 @@ BASE_TEMPLATE = """
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('index') }}"><i class="bi bi-house me-1"></i>Home</a></li>
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('documents') }}"><i class="bi bi-file-earmark me-1"></i>Dokumen</a></li>
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('comparisons') }}"><i class="bi bi-bar-chart me-1"></i>Progress</a></li>
-      
+        <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('testing_panel') }}"><i class="bi bi-flask me-1"></i>Testing</a></li>
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('settings') }}"><i class="bi bi-gear me-1"></i>Settings</a></li>
         <li class="nav-item"><a class="nav-link text-danger" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right me-1"></i>Logout</a></li>
         {% else %}
@@ -1809,7 +1817,7 @@ def index():
     <div class="card card-shadow mt-4">
       <div class="card-body p-4 text-center">
         <h5 class="fw-bold mb-2"><i class="bi bi-mortarboard me-2"></i>Sudah Selesai Skripsi?</h5>
-        <p class="text-muted">Kalau skripsimu sudah selesai dan tidak butuh reminder progres lagi, tandai di sini ya.</p>
+        <p class="text-muted">Kalau skripsimu sudah kelar dan tidak butuh reminder progres lagi, tandai di sini ya.</p>
         <form method="post" action="{{ url_for('thesis_finish') }}" onsubmit="return confirm('Yakin skripsi sudah selesai? Reminder progres akan dihentikan.');">
           <button class="btn btn-outline-success" type="submit"><i class="bi bi-check2-circle me-2"></i>Skripsi Selesai</button>
         </form>
@@ -2399,7 +2407,7 @@ def settings():
           <div class="mb-3 input-icon">
             <i class="bi bi-whatsapp"></i>
             <input type="tel" class="form-control" name="phone_number" value="{{ user['phone_number'] or '' }}" placeholder="08123456789">
-            <small class="text-muted d-block mt-1">Masukkan nomor WhatsApp aktif untuk menerima notifikasi reminder</small>
+            <small class="text-muted d-block mt-1">Masukkan nomor WhatsApp aktif untuk menerima notifikasi reminder streak (via Fonnte).</small>
           </div>
           <button type="submit" class="btn btn-primary w-100"><i class="bi bi-save me-2"></i>Simpan Perubahan</button>
           <a href="{{ url_for('index') }}" class="btn btn-outline-secondary w-100 mt-2"><i class="bi bi-arrow-left me-2"></i>Kembali</a>
