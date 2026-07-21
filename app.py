@@ -10,7 +10,9 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 from docx import Document
-from flask import Flask, flash, redirect, render_template_string, request, session, url_for
+from flask import (
+    Flask, flash, redirect, render_template_string, request, send_from_directory, session, url_for,
+)
 from PyPDF2 import PdfReader
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -840,14 +842,22 @@ def get_comparisons_by_user(user_id):
 
 
 def get_best_highlight_for_date(user_id, date_str):
+    # PENTING: kriteria "terbaik" di sini HARUS sama dengan get_recent_progress_highlight_by_user
+    # dan get_comparisons_by_user (urut berdasarkan difference_percent DESC = progres paling
+    # besar dianggap terbaik). Sebelumnya fungsi ini urut berdasarkan similarity_percent DESC
+    # (progres paling KECIL yang dianggap "terbaik"), sehingga kurva mingguan, "Progress Terbaik
+    # Hari Ini", dan "Progress Hari Ini" menampilkan hasil yang berbeda/tidak sinkron dengan
+    # "Highlight Progress 1-3 Hari Terakhir" dan tabel Progress Berurutan / Semua Comparison.
+    # doc1_name/doc2_name juga di-select di sini supaya info "compare file vs" ikut tersedia.
     conn = get_conn()
     rows = conn.execute(
         """
-        SELECT c.* FROM comparisons c
+        SELECT c.*, d1.original_name AS doc1_name, d2.original_name AS doc2_name
+        FROM comparisons c
         JOIN documents d1 ON c.doc1_id = d1.id
         JOIN documents d2 ON c.doc2_id = d2.id
         WHERE c.user_id = ? AND (d1.upload_date = ? OR d2.upload_date = ?)
-        ORDER BY c.similarity_percent DESC, c.id DESC
+        ORDER BY c.difference_percent DESC, c.id DESC
         """,
         (user_id, date_str, date_str),
     ).fetchall()
@@ -1459,7 +1469,7 @@ BASE_TEMPLATE = """
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('index') }}"><i class="bi bi-house me-1"></i>Home</a></li>
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('documents') }}"><i class="bi bi-file-earmark me-1"></i>Dokumen</a></li>
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('comparisons') }}"><i class="bi bi-bar-chart me-1"></i>Progress</a></li>
-        <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('testing_panel') }}"><i class="bi bi-flask me-1"></i>Testing</a></li>
+      
         <li class="nav-item"><a class="nav-link text-white" href="{{ url_for('settings') }}"><i class="bi bi-gear me-1"></i>Settings</a></li>
         <li class="nav-item"><a class="nav-link text-danger" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right me-1"></i>Logout</a></li>
         {% else %}
@@ -1700,6 +1710,12 @@ def index():
         saved_name = f"{timestamp}_{secure_filename(original_name)}"
         save_path = UPLOAD_FOLDER / saved_name
 
+        # Dicek SEBELUM insert: apakah ini benar-benar dokumen pertama user ini sepanjang masa.
+        # Upload pertama tidak punya dokumen lain untuk dibandingkan, jadi tidak boleh
+        # menunggu hasil compare untuk dianggap "valid" — kalau tidak, notifikasi
+        # "upload pertama kali" baru akan terkirim setelah upload dokumen KEDUA.
+        is_very_first_upload = len(get_documents_by_user(user_id)) == 0
+
         try:
             file.save(save_path)
             raw_text = extract_text(save_path, ext)
@@ -1707,7 +1723,8 @@ def index():
             new_doc_id = save_document_record(user_id, original_name, saved_name, ext, processed)
             compare_new_document_against_all(user_id, new_doc_id)
             best = get_today_best_highlight(user_id)
-            if best and float(best["similarity_percent"]) < 100.0:
+            is_valid_progress = is_very_first_upload or (best and float(best["similarity_percent"]) < 100.0)
+            if is_valid_progress:
                 update_streak_after_valid_upload(user_id)
             flash(f"File '{original_name}' berhasil diupload dan progress diperbarui.", "success")
         except Exception as e:
@@ -1792,7 +1809,7 @@ def index():
     <div class="card card-shadow mt-4">
       <div class="card-body p-4 text-center">
         <h5 class="fw-bold mb-2"><i class="bi bi-mortarboard me-2"></i>Sudah Selesai Skripsi?</h5>
-        <p class="text-muted">Kalau skripsimu sudah kelar dan tidak butuh reminder progres lagi, tandai di sini ya.</p>
+        <p class="text-muted">Kalau skripsimu sudah selesai dan tidak butuh reminder progres lagi, tandai di sini ya.</p>
         <form method="post" action="{{ url_for('thesis_finish') }}" onsubmit="return confirm('Yakin skripsi sudah selesai? Reminder progres akan dihentikan.');">
           <button class="btn btn-outline-success" type="submit"><i class="bi bi-check2-circle me-2"></i>Skripsi Selesai</button>
         </form>
@@ -2056,7 +2073,6 @@ def documents():
         flash("Silakan login terlebih dahulu.", "warning")
         return redirect(url_for("login"))
     docs = get_documents_by_user(session["user_id"])
-    upload_days = get_upload_days_by_user(session["user_id"])
     content = render_template_string(
         """
 <div class="card card-shadow mb-4">
@@ -2065,7 +2081,7 @@ def documents():
     <p class="text-muted">Upload dokumen baru dilakukan lewat <a href="{{ url_for('index') }}">Dashboard</a>.</p>
     <div class="table-responsive">
       <table class="table table-striped">
-        <thead><tr><th>No</th><th>Nama File</th><th>Ext</th><th>Uploaded At</th><th>Aksi</th></tr></thead>
+        <thead><tr><th>No</th><th>Nama File</th><th>Ext</th><th>Uploaded At</th><th>Preview</th><th>Aksi</th></tr></thead>
         <tbody>
           {% if docs %}
             {% for doc in docs %}
@@ -2074,40 +2090,123 @@ def documents():
               <td>{{ doc["original_name"] }}</td>
               <td><span class="stat-pill">{{ doc["file_ext"] }}</span></td>
               <td>{{ doc["uploaded_at"] }}</td>
-              <td><a class="btn btn-sm btn-dark" href="{{ url_for('document_detail', doc_id=doc['id']) }}"><i class="bi bi-eye me-1"></i>Detail</a></td>
+              <td>
+                <button type="button" class="btn btn-sm btn-outline-light btn-preview-file"
+                        data-src="{{ url_for('document_preview', doc_id=doc['id']) }}"
+                        data-name="{{ doc['original_name'] }}">
+                  <i class="bi bi-eye me-1"></i>Preview
+                </button>
+              </td>
+              <td><a class="btn btn-sm btn-dark" href="{{ url_for('document_detail', doc_id=doc['id']) }}"><i class="bi bi-diagram-3 me-1"></i>Detail</a></td>
             </tr>
             {% endfor %}
           {% else %}
-            <tr><td colspan="5" class="text-center">Belum ada dokumen.</td></tr>
+            <tr><td colspan="6" class="text-center">Belum ada dokumen.</td></tr>
           {% endif %}
         </tbody>
       </table>
     </div>
   </div>
 </div>
-<div class="card card-shadow">
-  <div class="card-body p-4">
-    <h4 class="fw-bold mb-3"><i class="bi bi-calendar me-2"></i>Semua Hari Upload Tercatat</h4>
-    <div class="table-responsive">
-      <table class="table table-sm table-striped">
-        <thead><tr><th>Tanggal</th><th>Total File</th></tr></thead>
-        <tbody>
-          {% if upload_days %}
-            {% for day in upload_days %}
-            <tr><td>{{ day["upload_date"] }}</td><td>{{ day["total"] }}</td></tr>
-            {% endfor %}
-          {% else %}
-            <tr><td colspan="2" class="text-center">Belum ada upload.</td></tr>
-          {% endif %}
-        </tbody>
-      </table>
+
+<div class="modal fade" id="filePreviewModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="filePreviewLabel">Preview File</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body p-0" style="height:75vh;">
+        <iframe id="filePreviewFrame" src="" style="width:100%;height:100%;border:0;background:#fff;" title="Preview File"></iframe>
+      </div>
     </div>
   </div>
 </div>
+<script>
+(function () {
+  var modalEl = document.getElementById('filePreviewModal');
+  var frame = document.getElementById('filePreviewFrame');
+  var label = document.getElementById('filePreviewLabel');
+  if (!modalEl) { return; }
+
+  // Tombol dipasang listener-nya duluan, cek ketersediaan bootstrap baru dilakukan
+  // saat tombol DIKLIK (bukan saat script ini jalan) — karena <script> bootstrap.bundle.min.js
+  // baru dimuat di paling bawah <body>, setelah konten halaman ini.
+  document.querySelectorAll('.btn-preview-file').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      frame.src = btn.getAttribute('data-src');
+      label.textContent = 'Preview: ' + btn.getAttribute('data-name');
+      if (window.bootstrap) {
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+      }
+    });
+  });
+  modalEl.addEventListener('hidden.bs.modal', function () {
+    frame.src = '';
+  });
+})();
+</script>
 """,
-        docs=docs, upload_days=upload_days,
+        docs=docs,
     )
     return render_template_string(BASE_TEMPLATE, title="Dokumen", content=content)
+
+
+@app.route("/documents/<int:doc_id>/file")
+def document_file(doc_id):
+    """Serve file ASLI apa adanya (dipakai untuk PDF, karena browser bisa render PDF native)."""
+    if "user_id" not in session:
+        flash("Silakan login terlebih dahulu.", "warning")
+        return redirect(url_for("login"))
+    doc = get_document_by_id_and_user(doc_id, session["user_id"])
+    if not doc:
+        flash("Dokumen tidak ditemukan.", "danger")
+        return redirect(url_for("documents"))
+    file_path = UPLOAD_FOLDER / doc["saved_name"]
+    if not file_path.exists():
+        flash("File fisik dokumen ini tidak ditemukan di server.", "danger")
+        return redirect(url_for("documents"))
+    return send_from_directory(
+        str(UPLOAD_FOLDER), doc["saved_name"], as_attachment=False, download_name=doc["original_name"]
+    )
+
+
+@app.route("/documents/<int:doc_id>/preview")
+def document_preview(doc_id):
+    """
+    Konten yang dimuat ke iframe modal preview di halaman Daftar Dokumen.
+    - PDF: kirim file aslinya, browser sudah bisa render PDF secara native lewat iframe.
+    - txt/docx/html/htm: browser TIDAK bisa merender docx secara native, jadi supaya preview
+      konsisten untuk semua jenis file yang boleh diupload, tampilkan teks hasil ekstraksi
+      (raw_text, yang sudah disimpan sejak upload) di dalam halaman sederhana.
+    """
+    if "user_id" not in session:
+        return "Silakan login terlebih dahulu.", 401
+    doc = get_document_by_id_and_user(doc_id, session["user_id"])
+    if not doc:
+        return "Dokumen tidak ditemukan.", 404
+
+    if doc["file_ext"] == "pdf":
+        file_path = UPLOAD_FOLDER / doc["saved_name"]
+        if not file_path.exists():
+            return "<p style='font-family:sans-serif;color:#555;padding:16px;'>File fisik tidak ditemukan di server.</p>"
+        return send_from_directory(
+            str(UPLOAD_FOLDER), doc["saved_name"], as_attachment=False, download_name=doc["original_name"]
+        )
+
+    text = doc["raw_text"] or "(Tidak ada teks yang bisa diekstrak dari file ini.)"
+    return render_template_string(
+        """
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+  body { background:#1c1c1c; color:#f4f1ee; font-family: 'Inter', Arial, sans-serif; margin:0; padding:20px; }
+  pre { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 14px; line-height:1.7; margin:0; }
+</style></head>
+<body><pre>{{ text }}</pre></body></html>
+""",
+        text=text,
+    )
+
 
 
 @app.route("/documents/<int:doc_id>")
@@ -2213,7 +2312,6 @@ def comparisons():
         flash("Silakan login terlebih dahulu.", "warning")
         return redirect(url_for("login"))
     comparisons_data = get_comparisons_by_user(session["user_id"])
-    sequential_progress = get_sequential_progress_by_user(session["user_id"])
     content = render_template_string(
         """
 <div class="card card-shadow mb-4">
@@ -2249,35 +2347,8 @@ def comparisons():
     </div>
   </div>
 </div>
-<div class="card card-shadow">
-  <div class="card-body p-4">
-    <h3 class="fw-bold mb-3"><i class="bi bi-arrow-right-circle me-2"></i>Semua Progress Berurutan</h3>
-    <p class="text-muted">Urutan kronologis dari dokumen pertama sampai terbaru.</p>
-    <div class="table-responsive">
-      <table class="table table-striped">
-        <thead><tr><th>No</th><th>Dari</th><th>Ke</th><th>Similarity</th><th>Difference</th><th>Status</th></tr></thead>
-        <tbody>
-          {% if sequential_progress %}
-            {% for item in sequential_progress %}
-            <tr>
-              <td>{{ loop.index }}</td>
-              <td>{{ item.from_name }}</td>
-              <td>{{ item.to_name }}</td>
-              <td>{{ item.similarity_percent }}%</td>
-              <td><span class="badge badge-flame-on">{{ item.difference_percent }}%</span></td>
-              <td>{{ item.progress_label }}</td>
-            </tr>
-            {% endfor %}
-          {% else %}
-            <tr><td colspan="6" class="text-center">Belum cukup dokumen untuk menghitung progres berurutan.</td></tr>
-          {% endif %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
 """,
-        comparisons_data=comparisons_data, sequential_progress=sequential_progress,
+        comparisons_data=comparisons_data,
     )
     return render_template_string(BASE_TEMPLATE, title="Progress", content=content)
 
@@ -2328,7 +2399,7 @@ def settings():
           <div class="mb-3 input-icon">
             <i class="bi bi-whatsapp"></i>
             <input type="tel" class="form-control" name="phone_number" value="{{ user['phone_number'] or '' }}" placeholder="08123456789">
-            <small class="text-muted d-block mt-1">Masukkan nomor WhatsApp aktif untuk menerima notifikasi reminder streak (via Fonnte).</small>
+            <small class="text-muted d-block mt-1">Masukkan nomor WhatsApp aktif untuk menerima notifikasi reminder</small>
           </div>
           <button type="submit" class="btn btn-primary w-100"><i class="bi bi-save me-2"></i>Simpan Perubahan</button>
           <a href="{{ url_for('index') }}" class="btn btn-outline-secondary w-100 mt-2"><i class="bi bi-arrow-left me-2"></i>Kembali</a>
