@@ -1816,7 +1816,7 @@ def index():
     <div class="card card-shadow mt-4">
       <div class="card-body p-4 text-center">
         <h5 class="fw-bold mb-2"><i class="bi bi-mortarboard me-2"></i>Sudah Selesai Skripsi?</h5>
-        <p class="text-muted">Kalau skripsimu sudah kelar dan tidak butuh reminder progres lagi, tandai di sini ya.</p>
+        <p class="text-muted">Kalau skripsimu sudah selesai dan tidak butuh reminder progres lagi, tandai di sini ya.</p>
         <form method="post" action="{{ url_for('thesis_finish') }}" onsubmit="return confirm('Yakin skripsi sudah selesai? Reminder progres akan dihentikan.');">
           <button class="btn btn-outline-success" type="submit"><i class="bi bi-check2-circle me-2"></i>Skripsi Selesai</button>
         </form>
