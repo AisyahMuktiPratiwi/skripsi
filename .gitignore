@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+venv/
+
+# VS Code
+.vscode/
+
+# Upload
+uploads/
+
