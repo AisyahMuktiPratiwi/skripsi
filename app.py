@@ -119,94 +119,106 @@ def normalize_phone_number(phone_number: str) -> str:
         digits = "62" + digits
     return digits
 
-
 # ==================== INISIALISASI DATABASE ====================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
+
+    # ---- Tabel users (Tabel 3.1 db.docx) ----
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            phone_number TEXT,
-            created_at TEXT NOT NULL,
-            welcome_sent INTEGER NOT NULL DEFAULT 0
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            username        VARCHAR(50)  UNIQUE NOT NULL CHECK(length(username) <= 50),
+            email           VARCHAR(100) UNIQUE NOT NULL CHECK(length(email) <= 100),
+            password_hash   VARCHAR(100) NOT NULL,
+            phone_number    VARCHAR(15)  CHECK(phone_number IS NULL OR length(phone_number) <= 15),
+            created_at      TIMESTAMP NOT NULL,
+            -- kolom tambahan di luar rancangan Bab III, untuk kebutuhan pengembangan sistem:
+            welcome_sent    INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+
+    # ---- Tabel documents (Tabel 3.2 db.docx) ----
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            original_name TEXT NOT NULL,
-            saved_name TEXT NOT NULL,
-            file_ext TEXT NOT NULL,
-            uploaded_at TEXT NOT NULL,
-            upload_date TEXT NOT NULL,
-            raw_text TEXT,
-            clean_text TEXT,
-            kgrams_json TEXT,
-            hashes_json TEXT,
-            windows_json TEXT,
-            fingerprints_json TEXT,
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id             INTEGER NOT NULL,
+            original_name       VARCHAR(255) NOT NULL CHECK(length(original_name) <= 255),
+            saved_name          VARCHAR(255) NOT NULL CHECK(length(saved_name) <= 255),
+            file_ext            VARCHAR(10)  NOT NULL CHECK(length(file_ext) <= 10),
+            uploaded_at         TIMESTAMP NOT NULL,
+            upload_date         DATE NOT NULL,
+            raw_text            TEXT,
+            clean_text          TEXT,
+            kgrams_json         TEXT,
+            hashes_json         TEXT,
+            windows_json        TEXT,
+            fingerprints_json   TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
         """
     )
+
+    # ---- Tabel comparisons (Tabel 3.3 db.docx) ----
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS comparisons (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            doc1_id INTEGER NOT NULL,
-            doc2_id INTEGER NOT NULL,
-            similarity_percent REAL NOT NULL,
-            difference_percent REAL NOT NULL,
-            process_time REAL NOT NULL,
-            progress_label TEXT NOT NULL,
-            created_at TEXT NOT NULL,
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id              INTEGER NOT NULL,
+            doc1_id              INTEGER NOT NULL,
+            doc2_id              INTEGER NOT NULL,
+            similarity_percent   DECIMAL(5,2)  NOT NULL,
+            difference_percent   DECIMAL(5,2)  NOT NULL,
+            process_time         DECIMAL(10,3) NOT NULL,
+            progress_label       VARCHAR(30) NOT NULL CHECK(length(progress_label) <= 30),
+            created_at           TIMESTAMP NOT NULL,
             UNIQUE(doc1_id, doc2_id),
-            FOREIGN KEY (user_id) REFERENCES users(id)
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (doc1_id) REFERENCES documents(id),
+            FOREIGN KEY (doc2_id) REFERENCES documents(id)
         )
         """
     )
-    # streak_state: status "api"/streak per user
+
+    # ---- Tabel streak_state (Tabel 3.4 db.docx) ----
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS streak_state (
-            user_id INTEGER PRIMARY KEY,
-            streak_count INTEGER NOT NULL DEFAULT 0,
-            last_valid_upload_date TEXT,
-            flame_status TEXT NOT NULL DEFAULT 'off',
-            flame_off_date TEXT,
-            last_reminder_type TEXT,
-            last_reminder_date TEXT,
-            thesis_finished INTEGER NOT NULL DEFAULT 0,
-            first_upload_notified INTEGER NOT NULL DEFAULT 0,
+            user_id                  INTEGER PRIMARY KEY,
+            streak_count             INTEGER NOT NULL DEFAULT 0,
+            last_valid_upload_date   DATE,
+            flame_status             VARCHAR(5) NOT NULL DEFAULT 'off' CHECK(length(flame_status) <= 5),
+            last_reminder_sent       TIMESTAMP,
+            -- kolom tambahan di luar rancangan Bab III, untuk kebutuhan pengembangan sistem:
+            flame_off_date           DATE,
+            last_reminder_type       VARCHAR(30) CHECK(last_reminder_type IS NULL OR length(last_reminder_type) <= 30),
+            last_reminder_date       DATE,
+            thesis_finished          INTEGER NOT NULL DEFAULT 0,
+            first_upload_notified    INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
         """
     )
+
+    # ---- Tabel reminder_log 
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS reminder_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            reminder_type TEXT NOT NULL,
-            sent_at TEXT NOT NULL,
-            phone_number TEXT NOT NULL,
-            status TEXT NOT NULL,
-            response TEXT,
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         INTEGER NOT NULL,
+            reminder_type   VARCHAR(30) NOT NULL CHECK(length(reminder_type) <= 30),
+            sent_at         TIMESTAMP NOT NULL,
+            phone_number    VARCHAR(15) NOT NULL CHECK(length(phone_number) <= 15),
+            status          VARCHAR(20) NOT NULL CHECK(length(status) <= 20),
+            response        TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
         """
     )
     conn.commit()
-
     # ---- migrasi kolom baru (untuk database lama hasil versi sebelumnya) ----
     existing_streak_cols = [row[1] for row in cur.execute("PRAGMA table_info(streak_state)").fetchall()]
     streak_migrations = {
@@ -328,7 +340,7 @@ def send_direct_message(user_id, phone_number, reminder_type, message):
     log_reminder(user_id, reminder_type, phone_number, status, json.dumps(result))
 
 
-# ==================== PESAN-PESAN WHATSAPP (HUMANIS & MEMOTIVASI) ====================
+# ==================== PESAN-PESAN WHATSAPP  ====================
 def msg_welcome(username):
     return (
         f"Halo {username}! \U0001F44B\U0001F525\n\n"
@@ -659,28 +671,18 @@ def preprocess_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     text = text.replace(" ", "")
     return text
-
-
 def make_kgrams(text: str, k: int):
     if len(text) < k:
         return []
     return [text[i:i + k] for i in range(len(text) - k + 1)]
-
-
 def stable_hash(kgram: str) -> int:
     return int(hashlib.md5(kgram.encode("utf-8")).hexdigest()[:8], 16)
-
-
 def hash_kgrams(kgrams):
     return [stable_hash(kgram) for kgram in kgrams]
-
-
 def make_windows(hashes, w: int):
     if len(hashes) < w:
         return []
     return [hashes[i:i + w] for i in range(len(hashes) - w + 1)]
-
-
 def winnowing_fingerprints(hashes, w: int):
     windows = make_windows(hashes, w)
     fingerprints = []
@@ -706,12 +708,8 @@ def calculate_similarity(fp1, fp2) -> float:
     intersection = len(set1 & set2)
     union = len(set1 | set2)
     return round((intersection / union) * 100, 2)
-
-
 def calculate_difference(similarity_percent: float) -> float:
     return round(100.0 - similarity_percent, 2)
-
-
 def get_progress_label(difference_percent: float) -> str:
     # Kategori progres berdasarkan persentase difference (100% - similarity):
     #   0%   - 10%  -> "Perubahan sangat kecil"
@@ -2762,4 +2760,8 @@ if __name__ == "__main__":
         print("Install dengan: pip install apscheduler")
         print("Atau panggil endpoint /admin/run-reminders?token=... lewat cron job harian.")
 
-    app.run(debug=True, host="0.0.0.0", port=5000)
+app.run(
+    debug=False,
+    host="0.0.0.0",
+    port=int(os.environ.get("PORT", 5000))
+)
